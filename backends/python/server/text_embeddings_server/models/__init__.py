@@ -14,9 +14,17 @@ from text_embeddings_server.models.classification_model import ClassificationMod
 from text_embeddings_server.models.jinaBert_model import FlashJinaBert
 from text_embeddings_server.models.flash_mistral import FlashMistral
 from text_embeddings_server.models.flash_qwen3 import FlashQwen3
-from text_embeddings_server.utils.device import get_device, is_rocm, use_ipex
+from text_embeddings_server.utils.device import get_device, is_neuron, is_rocm, use_ipex
 
 __all__ = ["Model"]
+
+# Neuron models — only imported on Neuron devices to avoid unnecessary dependencies
+create_neuron_model = None
+if is_neuron():
+    try:
+        from text_embeddings_server.models.neuron import create_neuron_model
+    except ImportError as e:
+        logger.warning(f"Could not import Neuron models: {e}")
 
 TRUST_REMOTE_CODE = os.getenv("TRUST_REMOTE_CODE", "false").lower() in ["true", "1"]
 DISABLE_TENSOR_CACHE = os.getenv("DISABLE_TENSOR_CACHE", "false").lower() in [
@@ -74,6 +82,21 @@ def get_model(model_path: Path, dtype: Optional[str], pool: str):
     logger.info(f"backend device: {device}")
 
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=TRUST_REMOTE_CODE)
+
+    # Neuron devices use torch-native eager or torch.compile mode
+    if is_neuron() and create_neuron_model is not None:
+        logger.info(f"Neuron device detected, using torch-native Neuron backend for {config.model_type}")
+        try:
+            return create_neuron_model(
+                model_path=model_path,
+                device=device,
+                dtype=datatype,
+                pool=pool,
+                trust_remote=TRUST_REMOTE_CODE,
+                config=config,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load Neuron model: {e}. Falling back to default.")
 
     if (
         hasattr(config, "auto_map")

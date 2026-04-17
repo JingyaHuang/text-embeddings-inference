@@ -1,4 +1,6 @@
 import os
+import re
+import functools
 from loguru import logger
 import importlib.metadata
 import importlib.util
@@ -55,6 +57,24 @@ def is_rocm() -> bool:
     return torch.cuda.is_available() and torch.version.hip is not None
 
 
+@functools.cache
+def get_neuron_major() -> int:
+    MAJORS_FILE = "/proc/devices"
+    NEURON_MAJOR_LINE = re.compile(r"^\s*(\d+)\s+neuron\s*$")
+    if not os.path.exists(MAJORS_FILE):
+        return -1
+    with open(MAJORS_FILE, "r") as f:
+        for line in f.readlines():
+            m = NEURON_MAJOR_LINE.match(line)
+            if m:
+                return int(m.group(1))
+    return -1
+
+
+def is_neuron() -> bool:
+    return get_neuron_major() > -1
+
+
 def use_ipex() -> bool:
     value = os.environ.get("USE_IPEX", "True").lower()
     return value in ["true", "1"] and _is_ipex_available()
@@ -79,5 +99,8 @@ def get_device():
 
         if hasattr(torch, "xpu") and torch.xpu.is_available():
             device = torch.device("xpu")
+    elif is_neuron():
+        import torch_neuronx  # noqa: F401 — registers torch.device("neuron") as PrivateUse1
+        device = torch.device("neuron")
 
     return device

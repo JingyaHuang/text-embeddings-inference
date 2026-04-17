@@ -28,7 +28,7 @@ use text_embeddings_backend_candle::CandleBackend;
 #[cfg(feature = "ort")]
 use text_embeddings_backend_ort::OrtBackend;
 
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-neuron"))]
 use text_embeddings_backend_python::PythonBackend;
 
 fn powers_of_two(max_value: usize) -> Vec<usize> {
@@ -493,7 +493,21 @@ async fn init_backend(
     }
 
     if let Some(api_repo) = api_repo.as_ref() {
-        if cfg!(feature = "python") || cfg!(feature = "candle") {
+        if cfg!(feature = "python-neuron") {
+            let start = std::time::Instant::now();
+            if download_safetensors(api_repo.clone()).await.is_err() {
+                tracing::warn!(
+                    "safetensors weights not found. Using `pytorch_model.bin` instead. \
+                    Model loading will be significantly slower."
+                );
+                tracing::info!("Downloading `pytorch_model.bin`");
+                api_repo
+                    .get("pytorch_model.bin")
+                    .await
+                    .map_err(|err| BackendError::WeightsNotFound(err.to_string()))?;
+            }
+            tracing::info!("Neuron model weights downloaded in {:?}", start.elapsed());
+        } else if cfg!(feature = "python") || cfg!(feature = "candle") {
             let start = std::time::Instant::now();
             if download_safetensors(api_repo.clone()).await.is_err() {
                 tracing::warn!("safetensors weights not found. Using `pytorch_model.bin` instead. Model loading will be significantly slower.");
@@ -571,8 +585,8 @@ async fn init_backend(
         }
     }
 
-    if cfg!(feature = "python") {
-        #[cfg(feature = "python")]
+    if cfg!(feature = "python") || cfg!(feature = "python-neuron") {
+        #[cfg(any(feature = "python", feature = "python-neuron"))]
         {
             let backend = std::thread::spawn(move || {
                 PythonBackend::new(
